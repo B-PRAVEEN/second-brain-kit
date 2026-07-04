@@ -1,0 +1,6 @@
+// Syncthing ignore patterns — device-specific artifacts must not sync.
+CLAUDE.md
+.DS_Store
+.git
+.obsidian/workspace*.json
+*.bak.*

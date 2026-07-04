@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+#
+# sbk — second-brain-kit CLI
+#
+#   sbk doctor                 verify the whole setup end to end
+#   sbk add <client>           configure a client (see: sbk adapters)
+#   sbk remove <client>        unconfigure a client
+#   sbk adapters               list available client adapters
+#   sbk visualize [--no-open]  build an interactive graph of the vault
+#   sbk print-rules            print agent rules + Claude Desktop paste block
+#   sbk print-config           print the universal MCP JSON block
+#   sbk git-timer [remove]     install/remove the vault autocommit timer
+#   sbk update                 update the kit (git pull)
+#   sbk uninstall              remove client configs + timer (vault is kept)
+#   sbk version | help
+#
+set -euo pipefail
+
+# ---- locate kit dir through symlinks ----
+SRC="${BASH_SOURCE[0]}"
+while [[ -L "$SRC" ]]; do
+  DIR="$(cd -P "$(dirname "$SRC")" && pwd)"
+  SRC="$(readlink "$SRC")"
+  [[ "$SRC" != /* ]] && SRC="$DIR/$SRC"
+done
+SBK_KIT_DIR="$(cd -P "$(dirname "$SRC")/.." && pwd)"
+export SBK_KIT_DIR
+
+# shellcheck source=../lib/common.sh
+source "$SBK_KIT_DIR/lib/common.sh"
+# shellcheck source=../lib/json.sh
+source "$SBK_KIT_DIR/lib/json.sh"
+
+load_kit_config
+SBK_VAULT="${SBK_VAULT:-}"
+
+require_vault() {
+  [[ -n "$SBK_VAULT" && -d "$SBK_VAULT" ]] \
+    || die "no vault configured — run install.sh first (looked in $SBK_CONFIG_FILE)"
+}
+
+CMD="${1:-help}"
+shift || true
+
+# ---------- helpers ----------
+adapter_path() {
+  local a="$SBK_KIT_DIR/lib/adapters/$1.sh"
+  [[ -f "$a" ]] || die "unknown client '$1' — see: sbk adapters"
+  echo "$a"
+}
+
+list_adapters() {
+  local a name
+  for a in "$SBK_KIT_DIR"/lib/adapters/*.sh; do
+    name="$(basename "$a" .sh)"
+    [[ "$name" == _* ]] && continue
+    echo "$name"
+  done
+}
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/ }"
+  printf '%s' "$s"
+}
+
+fm_field() { # fm_field <file> <key>
+  awk -v k="$2" '
+    NR==1 && $0 != "---" { exit }
+    /^---[ \t]*$/ { c++; if (c == 2) exit; next }
+    c == 1 && index($0, k ":") == 1 {
+      v = substr($0, length(k) + 2)
+      gsub(/^[ \t"'"'"']+|["'"'"' \t\r]+$/, "", v)
+      print v; exit
+    }' "$1"
+}
+
+# ---------- commands ----------
+cmd_doctor() {
+  require_vault
+  local problems=0
+
+  title "Environment"
+  have node && ok "node $(node -v)" || { fail "node missing — install Node.js"; ((problems++)) || true; }
+  have npx  && ok "npx present"     || { fail "npx missing"; ((problems++)) || true; }
+  have jq   && ok "jq present"      || info "jq missing (node fallback in use)"
+
+  title "Vault ($SBK_VAULT)"
+  local p
+  for p in index.md AGENTS.md log.md Reference/index.md Projects/index.md Sessions/index.md; do
+    if [[ -f "$SBK_VAULT/$p" ]]; then ok "$p"; else { fail "$p missing"; ((problems++)) || true; }; fi
+  done
+  [[ -d "$SBK_VAULT/.git" ]] && ok "git backup enabled" || info "git backup not enabled (install.sh --git)"
+
+  title "OKF frontmatter lint"
+  local total=0 bad=0 t f
+  while IFS= read -r -d '' f; do
+    ((total++)) || true
+    t="$(fm_field "$f" type)"
+    if [[ -z "$t" ]]; then
+      ((bad++)) || true
+      [[ $bad -le 5 ]] && warn "no 'type' in frontmatter: ${f#"$SBK_VAULT"/}"
+    fi
+    if grep -q '{{' "$f" 2>/dev/null; then
+      warn "unresolved {{ }} placeholder: ${f#"$SBK_VAULT"/}"
+      ((problems++)) || true
+    fi
+  done < <(find "$SBK_VAULT" -type f -name '*.md' -not -path '*/.*' -print0)
+  if [[ $bad -eq 0 ]]; then ok "$total notes, all carry a 'type' field"
+  else warn "$bad of $total notes missing 'type' (OKF requires it)"; fi
+
+  title "MCP server boot"
+  local out
+  if have timeout; then
+    out="$(timeout 60 npx -y "$SBK_MCP_PKG" "$SBK_VAULT" </dev/null 2>&1 || true)"
+  else # macOS has no timeout(1); the server exits on stdin EOF anyway
+    out="$(npx -y "$SBK_MCP_PKG" "$SBK_VAULT" </dev/null 2>&1 || true)"
+  fi
+  if grep -qi "filesystem server" <<<"$out"; then
+    ok "$SBK_MCP_PKG boots against the vault"
+  else
+    warn "could not confirm server boot (offline? first-run download?) — output:"
+    sed 's/^/    /' <<<"$out" | head -4
+  fi
+
+  title "Clients"
+  local a name
+  for a in "$SBK_KIT_DIR"/lib/adapters/*.sh; do
+    name="$(basename "$a" .sh)"
+    [[ "$name" == _* || "$name" == generic ]] && continue
+    if bash "$a" detect >/dev/null 2>&1; then
+      if bash "$a" verify "$SBK_VAULT" >/dev/null 2>&1; then
+        ok "$name: configured"
+      else
+        warn "$name: detected but not (fully) configured — run: sbk add $name"
+      fi
+    fi
+  done
+
+  title "Result"
+  if [[ $problems -eq 0 ]]; then ok "no blocking problems found"
+  else fail "$problems problem(s) — see above"; exit 1; fi
+}
+
+cmd_visualize() {
+  require_vault
+  local open=1
+  [[ "${1:-}" == "--no-open" ]] && open=0
+  local out="$SBK_VAULT/.sbk-graph.html"
+  local nodes="" linksj="" f rel dir ttl typ desc href sep=""
+
+  while IFS= read -r -d '' f; do
+    rel="${f#"$SBK_VAULT"/}"
+    dir="$(dirname "$rel")"; [[ "$dir" == "." ]] && dir=""
+    ttl="$(fm_field "$f" title)"; [[ -z "$ttl" ]] && ttl="$(basename "$rel" .md)"
+    typ="$(fm_field "$f" type)"; [[ -z "$typ" ]] && typ="note"
+    desc="$(fm_field "$f" description)"
+    nodes+="$sep{\"path\":\"$(json_escape "$rel")\",\"dir\":\"$(json_escape "$dir")\",\"title\":\"$(json_escape "$ttl")\",\"type\":\"$(json_escape "$typ")\",\"description\":\"$(json_escape "$desc")\"}"
+    while IFS= read -r href; do
+      [[ "$href" =~ ^[a-zA-Z]+:// ]] && continue
+      linksj+="${linksj:+,}{\"source\":\"$(json_escape "$rel")\",\"dir\":\"$(json_escape "$dir")\",\"href\":\"$(json_escape "$href")\"}"
+    done < <(grep -oE '\]\([^)]+\.md\)' "$f" 2>/dev/null | sed 's/^](//; s/)$//' || true)
+    sep=","
+  done < <(find "$SBK_VAULT" -type f -name '*.md' -not -path '*/.*' -print0 | sort -z)
+
+  local datafile; datafile="$(mktemp)"
+  printf '%s' "{\"nodes\":[$nodes],\"links\":[$linksj]}" > "$datafile"
+  awk -v datafile="$datafile" '
+    { i = index($0, "/*__SBK_DATA__*/")
+      if (i) {
+        printf "%s", substr($0, 1, i - 1)
+        while ((getline line < datafile) > 0) printf "%s", line
+        print ";"
+      } else print
+    }' "$SBK_KIT_DIR/lib/visualize.html" > "$out"
+  rm -f "$datafile"
+  ok "graph written: $out"
+  if [[ $open -eq 1 ]]; then
+    case "$(detect_os)" in
+      macos) open "$out" ;;
+      linux) xdg-open "$out" >/dev/null 2>&1 || info "open it manually: $out" ;;
+    esac
+  fi
+}
+
+cmd_print_rules() {
+  require_vault
+  title "Global agent rules (installed automatically for CLI clients)"
+  local tmp; tmp="$(mktemp)"
+  render_template "$SBK_KIT_DIR/templates/agent-rules.md" "$tmp"
+  cat "$tmp"; rm -f "$tmp"
+  title "Claude Desktop / GUI clients — Project instructions paste block"
+  tmp="$(mktemp)"
+  render_template "$SBK_KIT_DIR/templates/claude-desktop-instructions.md" "$tmp"
+  cat "$tmp"; rm -f "$tmp"
+}
+
+cmd_uninstall() {
+  require_vault
+  local a name
+  for a in "$SBK_KIT_DIR"/lib/adapters/*.sh; do
+    name="$(basename "$a" .sh)"
+    [[ "$name" == _* || "$name" == generic ]] && continue
+    if bash "$a" detect >/dev/null 2>&1 && bash "$a" verify "$SBK_VAULT" >/dev/null 2>&1; then
+      bash "$a" unconfigure || true
+    fi
+  done
+  bash "$SBK_KIT_DIR/lib/autocommit.sh" remove || true
+  rm -f "$HOME/.local/bin/sbk" "$SBK_CONFIG_FILE"
+  ok "second-brain-kit removed. Your vault at $SBK_VAULT is untouched."
+}
+
+case "$CMD" in
+  doctor)       cmd_doctor ;;
+  add)          require_vault; SBK_ASSUME_YES=1 bash "$(adapter_path "${1:?client name required}")" configure "$SBK_VAULT" ;;
+  remove)       bash "$(adapter_path "${1:?client name required}")" unconfigure ;;
+  adapters)     list_adapters ;;
+  visualize)    cmd_visualize "${1:-}" ;;
+  print-rules)  cmd_print_rules ;;
+  print-config) require_vault; print_mcp_json_block "$SBK_VAULT" ;;
+  git-timer)    require_vault
+                if [[ "${1:-}" == "remove" ]]; then bash "$SBK_KIT_DIR/lib/autocommit.sh" remove
+                else bash "$SBK_KIT_DIR/lib/autocommit.sh" install "$SBK_VAULT"; fi ;;
+  update)       if [[ -d "$SBK_KIT_DIR/.git" ]]; then
+                  git -C "$SBK_KIT_DIR" pull --ff-only && ok "kit updated"
+                else
+                  info "kit is not a git checkout — re-run the install one-liner to update"
+                fi ;;
+  uninstall)    cmd_uninstall ;;
+  version)      echo "second-brain-kit v$SBK_VERSION" ;;
+  help|--help|-h) grep '^#' "$SRC" | sed -n '2,16p' | sed 's/^# \{0,1\}//' ;;
+  *)            die "unknown command '$CMD' — see: sbk help" ;;
+esac
