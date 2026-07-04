@@ -9,7 +9,7 @@ recalls from the same vault. No cloud service, no database, no lock-in:
 just markdown files you can sync, grep, and version however you like.
 
 ```
-curl -fsSL https://raw.githubusercontent.com/OWNER/second-brain-kit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/B-PRAVEEN/second-brain-kit/main/install.sh | bash
 ```
 
 *(macOS & Linux. Windows: run inside WSL.)*
