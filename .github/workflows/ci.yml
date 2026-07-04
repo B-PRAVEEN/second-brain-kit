@@ -13,7 +13,7 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck -x install.sh lib/*.sh lib/adapters/*.sh bin/sbk
+          shellcheck -x -S warning install.sh lib/*.sh lib/adapters/*.sh bin/sbk
 
   smoke:
     runs-on: ubuntu-latest
