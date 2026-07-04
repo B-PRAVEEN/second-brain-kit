@@ -17,6 +17,27 @@
   #tip b { display: block; margin-bottom: 2px; }
   #tip .path { color: #8ab4f8; word-break: break-all; }
   canvas { display: block; }
+  #sbtab { position: fixed; top: 12px; right: 12px; z-index: 5; background: #1c2030;
+           border: 1px solid #343b52; border-radius: 6px; color: #c9cedb;
+           padding: 4px 9px; cursor: pointer; user-select: none; }
+  #sidebar { position: fixed; top: 0; right: 0; bottom: 0; width: 280px; z-index: 4;
+             background: #151823; border-left: 1px solid #2a3044; overflow-y: auto;
+             padding: 14px; padding-top: 44px; box-sizing: border-box;
+             transition: transform .2s; }
+  #sidebar.collapsed { transform: translateX(100%); }
+  #sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+                color: #9aa0ae; margin: 18px 0 6px; }
+  #search { width: 100%; box-sizing: border-box; background: #0f1117; color: #e6e6e6;
+            border: 1px solid #343b52; border-radius: 6px; padding: 6px 8px; font: inherit; }
+  #search:focus { outline: none; border-color: #8ab4f8; }
+  #matches { color: #9aa0ae; font-size: 12px; margin-top: 4px; min-height: 15px; }
+  .mstat { color: #c9cedb; font-size: 12px; margin: 3px 0; }
+  .mstat b { color: #e6e6e6; }
+  .sess { padding: 6px 8px; margin: 0 -8px; border-radius: 6px; cursor: pointer; }
+  .sess:hover { background: #1c2030; }
+  .sess .t { display: block; }
+  .sess .m { color: #9aa0ae; font-size: 11px; }
+  .empty { color: #9aa0ae; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -27,9 +48,20 @@
 </div>
 <div id="legend"></div>
 <div id="tip"></div>
+<div id="sbtab" title="toggle sidebar">☰</div>
+<div id="sidebar" class="collapsed">
+  <input id="search" placeholder="Search notes…">
+  <div id="matches"></div>
+  <h2>Vault</h2>
+  <div id="meta" class="empty">no vault metadata (regenerate with a newer sbk)</div>
+  <h2>Recent sessions</h2>
+  <div id="sess"><div class="empty">none yet</div></div>
+</div>
 <canvas id="c"></canvas>
 <script>
 const DATA = /*__SBK_DATA__*/ {"nodes":[],"links":[]};
+const META = DATA.meta || null;          // absent in payloads from older sbk
+const SESSIONS = DATA.sessions || [];
 
 // ---- resolve relative markdown links to vault-relative paths ----
 function resolveHref(dir, href) {
@@ -106,13 +138,18 @@ function draw() {
   ctx.translate(innerWidth/2+view.x, innerHeight/2+view.y);
   ctx.scale(view.k, view.k);
   ctx.strokeStyle = "rgba(140,150,180,0.25)"; ctx.lineWidth = 1;
-  for (const l of links) { ctx.beginPath(); ctx.moveTo(l.s.x,l.s.y); ctx.lineTo(l.t.x,l.t.y); ctx.stroke(); }
+  for (const l of links) {
+    ctx.globalAlpha = (l.s.dim || l.t.dim) ? 0.08 : 1;
+    ctx.beginPath(); ctx.moveTo(l.s.x,l.s.y); ctx.lineTo(l.t.x,l.t.y); ctx.stroke();
+  }
   for (const n of nodes) {
+    ctx.globalAlpha = n.dim ? 0.12 : 1;
     ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,7);
     ctx.fillStyle = colorOf(n.type||"note"); ctx.fill();
-    if (view.k > 0.6) { ctx.fillStyle="#c9cedb";
+    if (view.k > 0.6 && !n.dim) { ctx.fillStyle="#c9cedb";
       ctx.fillText(n.title.slice(0,28), n.x+n.r+4, n.y+4); }
   }
+  ctx.globalAlpha = 1;
 }
 (function loop(){ tick(); draw(); requestAnimationFrame(loop); })();
 
@@ -142,6 +179,51 @@ addEventListener("mousemove", e => {
 addEventListener("mouseup", () => { dragging = null; panning = false; });
 cv.addEventListener("wheel", e => { e.preventDefault();
   view.k = Math.max(0.2, Math.min(4, view.k * (e.deltaY < 0 ? 1.1 : 0.9))); }, { passive:false });
+
+// ---- sidebar: vault meta, recent sessions, search ----
+const esc = s => String(s ?? "").replace(/[&<>"]/g,
+  c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const sidebar = document.getElementById("sidebar");
+document.getElementById("sbtab").onclick = () => sidebar.classList.toggle("collapsed");
+
+if (META) {
+  sidebar.classList.remove("collapsed");
+  const g = META.git || {};
+  const gitLine = !g.enabled ? "git backup off"
+    : (g.dirty ? `● ${g.dirty} uncommitted` : "✓ clean")
+      + (g.lastAutocommit ? ` · autocommit ${esc(g.lastAutocommit)}` : "");
+  const meta = document.getElementById("meta");
+  meta.className = "";
+  meta.innerHTML =
+    `<div class="mstat"><b>${esc(META.vault)}</b></div>` +
+    `<div class="mstat">${META.noteCount ?? nodes.length} notes · ${META.sessionCount ?? 0} session logs</div>` +
+    `<div class="mstat">${gitLine}</div>` +
+    `<div class="mstat">kit v${esc(META.kitVersion)} · ${esc(META.generated)}</div>`;
+}
+
+if (SESSIONS.length) {
+  document.getElementById("sess").innerHTML = SESSIONS.map(s =>
+    `<div class="sess" title="${esc(s.path)}"><span class="t">${esc(s.title)}</span>` +
+    `<span class="m">${esc(s.client)}${s.timestamp ? " · " + esc(s.timestamp) : ""}</span></div>`).join("");
+  if (META && META.vaultPath) {
+    // best-effort: browsers differ in how they open file:// markdown links
+    document.querySelectorAll("#sess .sess").forEach((el, i) => {
+      el.onclick = () => { location.href = "file://" + encodeURI(META.vaultPath + "/" + SESSIONS[i].path); };
+    });
+  }
+}
+
+const searchBox = document.getElementById("search");
+const matchesEl = document.getElementById("matches");
+searchBox.addEventListener("input", () => {
+  const q = searchBox.value.trim().toLowerCase();
+  let m = 0;
+  for (const n of nodes) {
+    n.dim = !!q && !`${n.title} ${n.path} ${n.type||""}`.toLowerCase().includes(q);
+    if (q && !n.dim) m++;
+  }
+  matchesEl.textContent = q ? `${m} match${m === 1 ? "" : "es"}` : "";
+});
 </script>
 </body>
 </html>

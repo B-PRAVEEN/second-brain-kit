@@ -9,6 +9,7 @@
 #   -y, --yes         non-interactive (accept defaults, configure all detected clients)
 #   --vault PATH      vault location            (default: ~/SecondBrain)
 #   --git             enable git backup in the vault (init + autocommit timer)
+#   --menubar         install the macOS menu-bar plugin (SwiftBar/xbar)
 #   --search          reserved: local full-text search MCP (v2, prints roadmap note)
 #   --no-clients      create the vault only; skip client configuration
 #   -h, --help        this help
@@ -48,6 +49,7 @@ source "$SBK_KIT_DIR/lib/json.sh"
 SBK_ASSUME_YES=0
 SBK_VAULT=""
 OPT_GIT=0
+OPT_MENUBAR=0
 OPT_SEARCH=0
 OPT_NO_CLIENTS=0
 
@@ -56,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     -y|--yes)      SBK_ASSUME_YES=1 ;;
     --vault)       SBK_VAULT="${2:?--vault needs a path}"; shift ;;
     --git)         OPT_GIT=1 ;;
+    --menubar)     OPT_MENUBAR=1 ;;
     --search)      OPT_SEARCH=1 ;;
     --no-clients)  OPT_NO_CLIENTS=1 ;;
     -h|--help)     grep '^#' "$0" | head -20 | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -104,6 +107,7 @@ seed "stignore.template"     ".stignore"
 seed "Reference/index.md"    "Reference/index.md"
 seed "Projects/index.md"     "Projects/index.md"
 seed "Sessions/index.md"     "Sessions/index.md"
+seed "Inbox/index.md"        "Inbox/index.md"
 
 for d in Claude Codex Kimi Gemini Cursor Windsurf Other; do
   mkdir -p "$SBK_VAULT/Sessions/$d"
@@ -180,6 +184,18 @@ else
   skip "disabled (re-run with --git to enable)"
 fi
 
+# ---------- menu bar (opt-in, macOS) ----------
+title "Menu bar (macOS)"
+if [[ "$OS" == "macos" ]]; then
+  if [[ "$OPT_MENUBAR" == "1" ]] || { [[ "$SBK_ASSUME_YES" != "1" ]] && ask "Install the SwiftBar/xbar menu-bar plugin (vault status + quick capture)?"; }; then
+    bash "$SBK_KIT_DIR/lib/menubar.sh" install "$SBK_VAULT" || warn "menu-bar plugin not installed — run later: sbk menubar"
+  else
+    skip "disabled (re-run with --menubar, or later: sbk menubar)"
+  fi
+else
+  skip "macOS-only — skipped"
+fi
+
 # ---------- search (v2 stub) ----------
 if [[ "$OPT_SEARCH" == "1" ]]; then
   title "Search"
@@ -232,5 +248,7 @@ cat <<EOF
   4. In any agent, try:            "save this session"
      → a note should land in $SBK_VAULT/Sessions/<Client>/
   5. Browse your brain as a graph: sbk visualize
+  6. macOS: menu-bar companion:    sbk menubar
+     (vault status, recent sessions, quick capture — needs SwiftBar or xbar)
 
 EOF

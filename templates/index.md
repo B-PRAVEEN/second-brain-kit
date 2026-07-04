@@ -19,6 +19,7 @@ session logs stay in their dated folders.
 ## Knowledge
 - [Reference/](Reference/index.md) — durable facts, runbooks, how-tos
 - [Projects/](Projects/index.md) — active project notes
+- [Inbox/](Inbox/index.md) — quick captures awaiting triage
 
 ## Session archives
 - [Sessions/](Sessions/index.md) — append-only agent session logs, per client

@@ -3,7 +3,7 @@
 # Sourced by install.sh, bin/sbk, and every adapter.
 
 # shellcheck disable=SC2034
-SBK_VERSION="0.1.0"
+SBK_VERSION="0.2.0"
 SBK_SERVER_NAME="second-brain"
 SBK_MCP_PKG="@modelcontextprotocol/server-filesystem"
 SBK_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/second-brain-kit"

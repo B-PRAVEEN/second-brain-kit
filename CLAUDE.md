@@ -26,12 +26,16 @@ lib/common.sh           logging (ok/warn/fail/info/skip), prompts (ask/ask_value
                         kit config (~/.config/second-brain-kit/config)
 lib/json.sh             merge-safe JSON edits (jq, node fallback); never edit JSON by hand
 lib/autocommit.sh       git autocommit timer (launchd on macOS, systemd user on Linux)
+lib/menubar.sh          installs/removes the macOS menu-bar plugin (SwiftBar/xbar)
+lib/menubar-plugin.sh   the plugin itself; sources ~/.config/second-brain-kit/config
+                        at runtime, calls sbk by absolute path (SwiftBar strips PATH)
 lib/adapters/_shared.sh adapter boilerplate + adapter_main dispatch
 lib/adapters/<client>.sh  one per client — THE extension point
-lib/visualize.html      self-contained graph template; sbk visualize splices JSON
-                        at the /*__SBK_DATA__*/ marker (via awk, not sed — no escaping issues)
-bin/sbk                 CLI: doctor | add | remove | adapters | visualize |
-                        print-rules | print-config | git-timer | update | uninstall
+lib/visualize.html      self-contained graph + dashboard template; sbk visualize
+                        splices JSON (nodes/links/meta/sessions) at the
+                        /*__SBK_DATA__*/ marker (via awk, not sed — no escaping issues)
+bin/sbk                 CLI: doctor | add | remove | adapters | visualize | capture |
+                        menubar | print-rules | print-config | git-timer | update | uninstall
 templates/              vault seed files; {{VAULT_PATH}} {{DATE}} {{TIMESTAMP}}
                         substituted by render_template at install
 templates/agent-rules.md  the global rules block adapters install (condensed protocols)
@@ -106,6 +110,10 @@ location, zsh PATH handling) must be tested manually on a Mac.
   they're printed paste blocks by design.
 - Vault filenames contain an em dash (`YYYY-MM-DD-HHmm — slug.md`) — always
   quote, always `-print0`/`sort -z` in find pipelines.
+- bin/sbk's help text is its top-of-file comment block printed via
+  `sed -n '2,18p'` — adding a command line means bumping that range too.
+- SwiftBar/xbar run plugins with a minimal PATH — lib/menubar-plugin.sh sets
+  its own PATH and only ever calls sbk via `$SBK_KIT_DIR/bin/sbk`.
 
 ## Release
 
