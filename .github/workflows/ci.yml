@@ -37,3 +37,13 @@ jobs:
           sbk doctor
           sbk visualize --no-open
           test -s "$RUNNER_TEMP/vault/.sbk-graph.html"
+      - name: capture + dashboard data
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          sbk capture "hello from CI"
+          test -f "$RUNNER_TEMP/vault/Inbox/index.md"
+          ls "$RUNNER_TEMP/vault/Inbox" | grep -q 'captures'
+          sbk visualize --no-open
+          grep -q '"meta"' "$RUNNER_TEMP/vault/.sbk-graph.html"
+          grep -q '"sessions"' "$RUNNER_TEMP/vault/.sbk-graph.html"
+          ! grep -r '{{' "$RUNNER_TEMP/vault" --include='*.md'

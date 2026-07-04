@@ -30,11 +30,14 @@ curl -fsSL https://raw.githubusercontent.com/B-PRAVEEN/second-brain-kit/main/ins
   - **RECALL** — questions about *your* projects/data make the agent read the
     vault's `index.md` and follow links before answering from memory.
 - **`sbk` CLI** — `doctor` (verify everything), `visualize` (interactive
-  graph of your brain, zero dependencies), `add`/`remove` clients,
-  `print-rules`, `uninstall`.
+  graph + dashboard of your brain, zero dependencies), `capture` (quick note
+  into `Inbox/`), `add`/`remove` clients, `print-rules`, `uninstall`.
 - **Optional git backup** — `--git` initializes a repo and installs a
   30-minute autocommit timer. Sync (Syncthing/iCloud/Dropbox) is not backup;
   this is.
+- **Optional menu-bar companion (macOS)** — `sbk menubar` installs a
+  [SwiftBar](https://swiftbar.app)/xbar plugin: vault status at a glance,
+  recent session logs, quick capture, one click to the graph view.
 
 ## Supported clients
 
@@ -58,6 +61,7 @@ SecondBrain/
 ├── log.md              chronological vault history
 ├── Reference/          durable facts, runbooks, how-tos (curated)
 ├── Projects/           living per-project notes
+├── Inbox/              quick captures awaiting triage (sbk capture)
 └── Sessions/<Client>/  append-only session logs
 ```
 
@@ -70,10 +74,13 @@ consumer, today and tomorrow.
 ```bash
 ./install.sh                 # interactive
 ./install.sh -y --git        # non-interactive, with git backup
+./install.sh --menubar       # also install the macOS menu-bar plugin
 ./install.sh --vault ~/Brain --no-clients
 
 sbk doctor                   # end-to-end health check
-sbk visualize                # interactive graph of your vault
+sbk visualize                # interactive graph + dashboard of your vault
+sbk capture "call the bank"  # quick note into Inbox/ (daily captures file)
+sbk menubar                  # macOS menu-bar plugin (SwiftBar/xbar)
 sbk add cursor               # configure one client later
 sbk print-rules              # re-print paste blocks (Claude Desktop, Cursor)
 sbk uninstall                # removes configs & timer — never touches the vault

@@ -6,7 +6,9 @@
 #   sbk add <client>           configure a client (see: sbk adapters)
 #   sbk remove <client>        unconfigure a client
 #   sbk adapters               list available client adapters
-#   sbk visualize [--no-open]  build an interactive graph of the vault
+#   sbk visualize [--no-open]  build an interactive graph + dashboard of the vault
+#   sbk capture <text>         append a quick note to Inbox/ (daily captures file)
+#   sbk menubar [remove]       install/remove the macOS menu-bar plugin (SwiftBar/xbar)
 #   sbk print-rules            print agent rules + Claude Desktop paste block
 #   sbk print-config           print the universal MCP JSON block
 #   sbk git-timer [remove]     install/remove the vault autocommit timer
@@ -92,6 +94,9 @@ cmd_doctor() {
   for p in index.md AGENTS.md log.md Reference/index.md Projects/index.md Sessions/index.md; do
     if [[ -f "$SBK_VAULT/$p" ]]; then ok "$p"; else { fail "$p missing"; ((problems++)) || true; }; fi
   done
+  # Inbox/ arrived after v0.1.0 — informational only, older vaults must not fail.
+  [[ -f "$SBK_VAULT/Inbox/index.md" ]] && ok "Inbox/index.md" \
+    || info "Inbox/ not created yet (first 'sbk capture' or re-running install.sh creates it)"
   [[ -d "$SBK_VAULT/.git" ]] && ok "git backup enabled" || info "git backup not enabled (install.sh --git)"
 
   title "OKF frontmatter lint"
@@ -138,6 +143,13 @@ cmd_doctor() {
       fi
     fi
   done
+  if [[ "$(detect_os)" == "macos" ]]; then
+    if bash "$SBK_KIT_DIR/lib/menubar.sh" status >/dev/null 2>&1; then
+      ok "menu-bar plugin installed"
+    else
+      info "menu-bar plugin not installed (optional): sbk menubar"
+    fi
+  fi
 
   title "Result"
   if [[ $problems -eq 0 ]]; then ok "no blocking problems found"
@@ -150,6 +162,8 @@ cmd_visualize() {
   [[ "${1:-}" == "--no-open" ]] && open=0
   local out="$SBK_VAULT/.sbk-graph.html"
   local nodes="" linksj="" f rel dir ttl typ desc href sep=""
+  local total=0 tmp client ts sessfile sess_count=0 sessionsj=""
+  sessfile="$(mktemp)"
 
   while IFS= read -r -d '' f; do
     rel="${f#"$SBK_VAULT"/}"
@@ -157,7 +171,21 @@ cmd_visualize() {
     ttl="$(fm_field "$f" title)"; [[ -z "$ttl" ]] && ttl="$(basename "$rel" .md)"
     typ="$(fm_field "$f" type)"; [[ -z "$typ" ]] && typ="note"
     desc="$(fm_field "$f" description)"
+    ((total++)) || true
     nodes+="$sep{\"path\":\"$(json_escape "$rel")\",\"dir\":\"$(json_escape "$dir")\",\"title\":\"$(json_escape "$ttl")\",\"type\":\"$(json_escape "$typ")\",\"description\":\"$(json_escape "$desc")\"}"
+    case "$rel" in
+      Sessions/*/*)
+        if [[ "$(basename "$rel")" != "index.md" ]]; then
+          tmp="${rel#Sessions/}"; client="${tmp%%/*}"
+          ts="$(fm_field "$f" timestamp)"
+          # basename<TAB>json — json_escape flattens tabs, so TAB is a safe delimiter;
+          # basenames start YYYY-MM-DD-HHmm, so a lexical sort is chronological.
+          printf '%s\t{"path":"%s","title":"%s","client":"%s","description":"%s","timestamp":"%s"}\n' \
+            "$(basename "$rel")" "$(json_escape "$rel")" "$(json_escape "$ttl")" \
+            "$(json_escape "$client")" "$(json_escape "$desc")" "$(json_escape "$ts")" >> "$sessfile"
+        fi
+        ;;
+    esac
     while IFS= read -r href; do
       [[ "$href" =~ ^[a-zA-Z]+:// ]] && continue
       linksj+="${linksj:+,}{\"source\":\"$(json_escape "$rel")\",\"dir\":\"$(json_escape "$dir")\",\"href\":\"$(json_escape "$href")\"}"
@@ -165,8 +193,27 @@ cmd_visualize() {
     sep=","
   done < <(find "$SBK_VAULT" -type f -name '*.md' -not -path '*/.*' -print0 | sort -z)
 
+  if [[ -s "$sessfile" ]]; then
+    sess_count="$(wc -l < "$sessfile" | tr -d ' ')"
+    sessionsj="$(sort -r "$sessfile" | head -7 | cut -f2- | paste -sd, - || true)"
+  fi
+
+  local gitj='"enabled":false'
+  local dirty branch last_commit last_ac
+  if [[ -d "$SBK_VAULT/.git" ]]; then
+    dirty="$(git -C "$SBK_VAULT" status --porcelain 2>/dev/null | wc -l | tr -d ' ' || true)"
+    [[ -n "$dirty" ]] || dirty=0
+    branch="$(git -C "$SBK_VAULT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    last_commit="$(git -C "$SBK_VAULT" log -1 --format=%cr 2>/dev/null || true)"
+    last_ac="$(git -C "$SBK_VAULT" log -1 --grep='^sbk autocommit:' --format=%cr 2>/dev/null || true)"
+    gitj="\"enabled\":true,\"dirty\":$dirty,\"branch\":\"$(json_escape "$branch")\",\"lastCommit\":\"$(json_escape "$last_commit")\",\"lastAutocommit\":\"$(json_escape "$last_ac")\""
+  fi
+  local metaj vault_disp="$SBK_VAULT"
+  if [[ "$vault_disp" == "$HOME"* ]]; then vault_disp="~${vault_disp#"$HOME"}"; fi
+  metaj="{\"vault\":\"$(json_escape "$vault_disp")\",\"vaultPath\":\"$(json_escape "$SBK_VAULT")\",\"generated\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"kitVersion\":\"$SBK_VERSION\",\"noteCount\":$total,\"sessionCount\":$sess_count,\"git\":{$gitj}}"
+
   local datafile; datafile="$(mktemp)"
-  printf '%s' "{\"nodes\":[$nodes],\"links\":[$linksj]}" > "$datafile"
+  printf '%s' "{\"nodes\":[$nodes],\"links\":[$linksj],\"meta\":$metaj,\"sessions\":[$sessionsj]}" > "$datafile"
   awk -v datafile="$datafile" '
     { i = index($0, "/*__SBK_DATA__*/")
       if (i) {
@@ -175,7 +222,7 @@ cmd_visualize() {
         print ";"
       } else print
     }' "$SBK_KIT_DIR/lib/visualize.html" > "$out"
-  rm -f "$datafile"
+  rm -f "$datafile" "$sessfile"
   ok "graph written: $out"
   if [[ $open -eq 1 ]]; then
     case "$(detect_os)" in
@@ -183,6 +230,37 @@ cmd_visualize() {
       linux) xdg-open "$out" >/dev/null 2>&1 || info "open it manually: $out" ;;
     esac
   fi
+}
+
+cmd_capture() {
+  require_vault
+  local text="$*"
+  [[ -n "$text" ]] || die "usage: sbk capture <text>"
+  mkdir -p "$SBK_VAULT/Inbox"
+  if [[ ! -f "$SBK_VAULT/Inbox/index.md" ]]; then
+    render_template "$SBK_KIT_DIR/templates/Inbox/index.md" "$SBK_VAULT/Inbox/index.md"
+    ok "created Inbox/index.md"
+  fi
+  local day f
+  day="$(date +%Y-%m-%d)"
+  f="$SBK_VAULT/Inbox/$day — captures.md"
+  if [[ ! -f "$f" ]]; then
+    cat > "$f" <<EOF
+---
+type: capture
+title: Captures — $day
+description: Quick captures for $day (sbk capture / menu bar).
+tags: [inbox, capture]
+timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+status: living
+---
+
+# Captures — $day
+
+EOF
+  fi
+  printf -- '- %s — %s\n' "$(date +%H:%M)" "$text" >> "$f"
+  ok "captured → ${f#"$SBK_VAULT"/}"
 }
 
 cmd_print_rules() {
@@ -208,6 +286,7 @@ cmd_uninstall() {
     fi
   done
   bash "$SBK_KIT_DIR/lib/autocommit.sh" remove || true
+  bash "$SBK_KIT_DIR/lib/menubar.sh" remove || true
   rm -f "$HOME/.local/bin/sbk" "$SBK_CONFIG_FILE"
   ok "second-brain-kit removed. Your vault at $SBK_VAULT is untouched."
 }
@@ -218,6 +297,10 @@ case "$CMD" in
   remove)       bash "$(adapter_path "${1:?client name required}")" unconfigure ;;
   adapters)     list_adapters ;;
   visualize)    cmd_visualize "${1:-}" ;;
+  capture)      cmd_capture "$@" ;;
+  menubar)      require_vault
+                if [[ "${1:-}" == "remove" ]]; then bash "$SBK_KIT_DIR/lib/menubar.sh" remove
+                else bash "$SBK_KIT_DIR/lib/menubar.sh" install "$SBK_VAULT"; fi ;;
   print-rules)  cmd_print_rules ;;
   print-config) require_vault; print_mcp_json_block "$SBK_VAULT" ;;
   git-timer)    require_vault
@@ -230,6 +313,6 @@ case "$CMD" in
                 fi ;;
   uninstall)    cmd_uninstall ;;
   version)      echo "second-brain-kit v$SBK_VERSION" ;;
-  help|--help|-h) grep '^#' "$SRC" | sed -n '2,16p' | sed 's/^# \{0,1\}//' ;;
+  help|--help|-h) grep '^#' "$SRC" | sed -n '2,18p' | sed 's/^# \{0,1\}//' ;;
   *)            die "unknown command '$CMD' — see: sbk help" ;;
 esac

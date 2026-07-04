@@ -27,6 +27,7 @@ log.md             chronological vault history (append entries)
 AGENTS.md          this file
 Reference/         durable facts & how-tos (typed concepts, curated)
 Projects/          per-project living notes
+Inbox/             quick captures awaiting triage (sbk capture / menu bar)
 Sessions/<Client>/ append-only session logs (Claude, Codex, Kimi, Gemini,
                    Cursor, Windsurf, Other)
 ```
